@@ -10,8 +10,23 @@ set -e
 # Ensure benchmark dependencies are available.
 # Creates an isolated venv with --system-site-packages so container packages are
 # reused and only missing deps get installed — without touching system Python.
+#
+# Uses uv instead of `python3 -m venv` + `pip` because some runtime images
+# (e.g. nvcr.io/nvstaging/ai-dynamo/vllm-runtime) ship a stripped `/opt/dynamo/venv`
+# that lacks `ensurepip`, which makes stdlib venv creation fail with
+# "ensurepip is not available". uv bootstraps its own pip and works from inside
+# a parent venv, so this is robust across container image variants.
 SA_BENCH_VENV="/tmp/sa-bench-venv"
 SA_BENCH_DEPS=(aiohttp numpy pandas datasets Pillow tqdm transformers huggingface_hub)
+
+ensure_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        return
+    fi
+    echo "uv not found — bootstrapping into \$HOME/.local/bin ..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+}
 
 ensure_sa_bench_deps() {
     # Quick check: if all deps import fine in current Python, skip venv entirely
@@ -21,11 +36,15 @@ ensure_sa_bench_deps() {
     fi
 
     echo "Missing sa-bench deps — installing into venv at $SA_BENCH_VENV ..."
-    if [ ! -d "$SA_BENCH_VENV" ]; then
-        python3 -m venv --system-site-packages "$SA_BENCH_VENV"
+    ensure_uv
+    if [ ! -x "$SA_BENCH_VENV/bin/python" ]; then
+        uv venv --system-site-packages --python 3.12 "$SA_BENCH_VENV"
     fi
+    # Activate so downstream `python3` / `pip` calls in this script resolve to
+    # the sa-bench venv. uv-created venvs don't ship pip, so use `uv pip install`
+    # which honors $VIRTUAL_ENV set by activate.
     source "$SA_BENCH_VENV/bin/activate"
-    pip install "${SA_BENCH_DEPS[@]}"
+    uv pip install "${SA_BENCH_DEPS[@]}"
     echo "sa-bench deps ready"
 }
 
