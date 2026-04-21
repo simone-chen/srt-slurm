@@ -17,7 +17,7 @@ set -e
 # "ensurepip is not available". uv bootstraps its own pip and works from inside
 # a parent venv, so this is robust across container image variants.
 SA_BENCH_VENV="/tmp/sa-bench-venv"
-SA_BENCH_DEPS=(aiohttp numpy pandas datasets Pillow tqdm transformers huggingface_hub jinja2)
+SA_BENCH_DEPS=(aiohttp numpy pandas datasets Pillow tqdm transformers huggingface_hub jinja2 sentencepiece protobuf)
 
 ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
@@ -30,7 +30,7 @@ ensure_uv() {
 
 ensure_sa_bench_deps() {
     # Quick check: if all deps import fine in current Python, skip venv entirely
-    if python3 -c "import aiohttp, numpy, pandas, datasets, PIL, tqdm, transformers, huggingface_hub, jinja2" 2>/dev/null; then
+    if python3 -c "import aiohttp, numpy, pandas, datasets, PIL, tqdm, transformers, huggingface_hub, jinja2, sentencepiece, google.protobuf" 2>/dev/null; then
         echo "All sa-bench deps already available — skipping venv setup"
         return
     fi
@@ -140,6 +140,8 @@ start_all_profiling
 for concurrency in "${CONCURRENCY_LIST[@]}"; do
 
     num_warmup_prompts=$((concurrency * NUM_WARMUP_MULT))
+    # Warmup uses the same flags as the main run so template/tokenizer breakage
+    # surfaces here (seconds) rather than after the main run starts (minutes).
     python3 -u "${WORK_DIR}/benchmark_serving.py" \
         --model "${MODEL_NAME}" --tokenizer "${MODEL_PATH}" \
         --host "$HOST" --port "$PORT" \
@@ -155,6 +157,7 @@ for concurrency in "${CONCURRENCY_LIST[@]}"; do
         --percentile-metrics ttft,tpot,itl,e2el \
         --max-concurrency "$concurrency" \
         --trust-remote-code \
+        "${CHAT_TEMPLATE_ARGS[@]}" \
         "${CUSTOM_TOKENIZER_ARGS[@]}"
 
     num_prompts=$((concurrency * NUM_PROMPTS_MULT))
