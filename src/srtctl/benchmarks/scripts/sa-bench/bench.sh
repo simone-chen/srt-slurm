@@ -17,7 +17,7 @@ set -e
 # "ensurepip is not available". uv bootstraps its own pip and works from inside
 # a parent venv, so this is robust across container image variants.
 SA_BENCH_VENV="/tmp/sa-bench-venv"
-SA_BENCH_DEPS=(aiohttp numpy pandas datasets Pillow tqdm transformers huggingface_hub)
+SA_BENCH_DEPS=(aiohttp numpy pandas datasets Pillow tqdm transformers huggingface_hub jinja2)
 
 ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
@@ -30,7 +30,7 @@ ensure_uv() {
 
 ensure_sa_bench_deps() {
     # Quick check: if all deps import fine in current Python, skip venv entirely
-    if python3 -c "import aiohttp, numpy, pandas, datasets, PIL, tqdm, transformers, huggingface_hub" 2>/dev/null; then
+    if python3 -c "import aiohttp, numpy, pandas, datasets, PIL, tqdm, transformers, huggingface_hub, jinja2" 2>/dev/null; then
         echo "All sa-bench deps already available — skipping venv setup"
         return
     fi
