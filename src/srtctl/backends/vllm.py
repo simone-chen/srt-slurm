@@ -243,7 +243,12 @@ class VLLMProtocol:
                     current_sys_port += 1
             else:
                 # DP+EP mode: one process per GPU
-                # Each process gets a single GPU and a unique dp_rank
+                # Each process gets a single GPU and a unique dp_rank.
+                # All processes in this endpoint share ONE dp_rpc_port, allocated
+                # per-leader-host so two DP endpoints on the same node get
+                # distinct ports and their rank-0 leaders don't race to bind.
+                endpoint_dp_rpc_port = port_allocator.next_dp_rpc_port(endpoint.nodes[0])
+
                 dp_rank = 0
                 for _node_rank, node in enumerate(endpoint.nodes):
                     for gpu_idx in sorted(endpoint.gpu_indices):
@@ -269,6 +274,7 @@ class VLLMProtocol:
                                 bootstrap_port=bootstrap_port,
                                 kv_events_port=kv_events_port,
                                 nixl_port=nixl_port,
+                                dp_rpc_port=endpoint_dp_rpc_port,
                             )
                         )
                         current_sys_port += 1
@@ -352,7 +358,17 @@ class VLLMProtocol:
             # DP+EP mode: each GPU runs its own process
             # process.node_rank is the dp_rank (set in endpoints_to_processes)
             dp_rank = process.node_rank
-            dp_rpc_port = config.pop("data-parallel-rpc-port", None) or config.pop("data_parallel_rpc_port", 13345)
+
+            # DP RPC port resolution order (first match wins):
+            #   1. per-endpoint allocation from NodePortAllocator (process.dp_rpc_port)
+            #      — ensures two DP endpoints on the same leader host get distinct ports
+            #   2. explicit override in recipe's vllm_config (data-parallel-rpc-port)
+            #      — escape hatch for users who want a fixed port
+            #   3. vLLM default (13345)
+            config_override = config.pop("data-parallel-rpc-port", None) or config.pop(
+                "data_parallel_rpc_port", None
+            )
+            dp_rpc_port = process.dp_rpc_port or config_override or 13345
 
             cmd.extend(
                 [
