@@ -161,8 +161,18 @@ class VLLMProtocol:
         gpus_per_node: int,
         available_nodes: Sequence[str],
     ) -> list[Endpoint]:
-        """Allocate endpoints to nodes."""
+        """Allocate endpoints to nodes.
+
+        When decode or agg runs in DP mode (data-parallel-size set), each endpoint's
+        rank-0 leader binds --data-parallel-rpc-port (default :13345) on its host.
+        srt-slurm currently uses the same port for every endpoint, so two DP
+        endpoints on the same host would collide. Force one-endpoint-per-node for
+        DP modes to avoid that.
+        """
         from srtctl.core.topology import allocate_endpoints
+
+        isolate_decode = num_decode > 0 and self._is_dp_mode("decode")
+        isolate_agg = num_agg > 0 and self._is_dp_mode("agg")
 
         return allocate_endpoints(
             num_prefill=num_prefill,
@@ -173,6 +183,8 @@ class VLLMProtocol:
             gpus_per_agg=gpus_per_agg,
             gpus_per_node=gpus_per_node,
             available_nodes=available_nodes,
+            isolate_decode_workers=isolate_decode,
+            isolate_agg_workers=isolate_agg,
         )
 
     def _is_dp_mode(self, mode: WorkerMode) -> bool:
