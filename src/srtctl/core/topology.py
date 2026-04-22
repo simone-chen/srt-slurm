@@ -188,8 +188,6 @@ def allocate_endpoints(
     gpus_per_agg: int,
     gpus_per_node: int,
     available_nodes: Sequence[str],
-    isolate_decode_workers: bool = False,
-    isolate_agg_workers: bool = False,
 ) -> list[Endpoint]:
     """Allocate endpoints to nodes based on GPU requirements.
 
@@ -204,12 +202,9 @@ def allocate_endpoints(
         gpus_per_agg: GPUs per agg worker
         gpus_per_node: GPUs available per node
         available_nodes: List of available node hostnames
-        isolate_decode_workers: If True, no two decode workers may share a node
-            (they can still share with prefill or an agg endpoint). Needed for DP
-            modes in vllm where each endpoint's rank-0 leader binds a fixed RPC
-            port (e.g. :13345) on its host — co-located DP decode endpoints would
-            otherwise collide on that port.
-        isolate_agg_workers: Same as isolate_decode_workers but for agg endpoints.
+
+    Returns:
+        List of Endpoint objects with node assignments
 
     Example:
         # 2 prefill workers with 8 GPUs each, 4 decode workers with 4 GPUs each
@@ -300,17 +295,7 @@ def allocate_endpoints(
     gpu_offset = 0
 
     # Simpler allocation: each worker gets nodes sequentially
-    def allocate_workers_simple(
-        mode: WorkerMode, count: int, gpus_per_worker: int, isolate_peers: bool = False
-    ) -> list[Endpoint]:
-        """Allocate N workers of a single mode.
-
-        When isolate_peers is True, each worker of this mode lands on its own node
-        — packing is still allowed with *prior* modes (e.g. prefill) because that
-        only affects the starting gpu_offset; the restriction is only peer-to-peer
-        within the current mode. This is the behavior required for DP-mode vllm
-        decode, where each endpoint's rank-0 binds a fixed DP RPC port.
-        """
+    def allocate_workers_simple(mode: WorkerMode, count: int, gpus_per_worker: int) -> list[Endpoint]:
         nonlocal node_idx, gpu_offset
         result = []
 
@@ -341,8 +326,7 @@ def allocate_endpoints(
                 gpu_indices = frozenset(range(gpu_offset, gpu_offset + gpus_per_worker))
                 gpu_offset += gpus_per_worker
 
-                if isolate_peers or gpu_offset >= gpus_per_node:
-                    # Advance to the next node so the next peer can't share this one.
+                if gpu_offset >= gpus_per_node:
                     node_idx += 1
                     gpu_offset = 0
 
@@ -371,14 +355,10 @@ def allocate_endpoints(
         if gpu_offset > 0 and (node_idx + 1) < len(available_nodes):
             node_idx += 1
             gpu_offset = 0
-        endpoints.extend(
-            allocate_workers_simple("decode", num_decode, gpus_per_decode, isolate_peers=isolate_decode_workers)
-        )
+        endpoints.extend(allocate_workers_simple("decode", num_decode, gpus_per_decode))
 
     if num_agg > 0:
-        endpoints.extend(
-            allocate_workers_simple("agg", num_agg, gpus_per_agg, isolate_peers=isolate_agg_workers)
-        )
+        endpoints.extend(allocate_workers_simple("agg", num_agg, gpus_per_agg))
 
     return endpoints
 
