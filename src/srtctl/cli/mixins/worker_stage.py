@@ -127,7 +127,13 @@ class WorkerStageMixin:
         if profiling.enabled:
             (self.runtime.log_dir / "profiles" / mode).mkdir(parents=True, exist_ok=True)
         if profiling.is_nsys:
-            nsys_output = f"/logs/profiles/{mode}/{process.node}_{mode}_w{index}_profile"
+            # Include node_rank in the nsys output path so DP-mode endpoints (where
+            # multiple processes share the same node+endpoint_index) don't collide
+            # on the same .nsys-rep file. Without this, N DP ranks all try to write
+            # the same path and either clobber each other or crash.
+            nsys_output = (
+                f"/logs/profiles/{mode}/{process.node}_{mode}_w{index}_r{process.node_rank}_profile"
+            )
             nsys_prefix = profiling.get_nsys_prefix(
                 nsys_output, frontend_type=self.config.frontend.type, backend_type=self.config.backend_type
             )
