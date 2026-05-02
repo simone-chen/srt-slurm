@@ -179,7 +179,7 @@ class VLLMProtocol:
         """Check if this mode uses Data Parallel + Expert Parallel pattern.
 
         DP+EP mode is detected when data-parallel-size is set in the mode's config.
-        In this mode, each GPU runs its own process (rather than TP across GPUs).
+        In this mode, each DP rank runs its own process spanning TP*PP GPUs.
         """
         config = self.get_config_for_mode(mode)
         return config.get("data-parallel-size") is not None or config.get("data_parallel_size") is not None
@@ -189,6 +189,16 @@ class VLLMProtocol:
         config = self.get_config_for_mode(mode)
         return config.get("data-parallel-size") or config.get("data_parallel_size")
 
+    def _get_tp_size(self, mode: WorkerMode) -> int:
+        """Get the tensor-parallel-size for a mode (defaults to 1)."""
+        config = self.get_config_for_mode(mode)
+        return int(config.get("tensor-parallel-size") or config.get("tensor_parallel_size") or 1)
+
+    def _get_pp_size(self, mode: WorkerMode) -> int:
+        """Get the pipeline-parallel-size for a mode (defaults to 1)."""
+        config = self.get_config_for_mode(mode)
+        return int(config.get("pipeline-parallel-size") or config.get("pipeline_parallel_size") or 1)
+
     def endpoints_to_processes(
         self,
         endpoints: list[Endpoint],
@@ -196,8 +206,9 @@ class VLLMProtocol:
     ) -> list[Process]:
         """Convert endpoints to processes.
 
-        For DP+EP mode (data-parallel-size set), creates one process per GPU.
-        For standard TP mode, creates one process per node.
+        For DP+EP mode (data-parallel-size set), creates one process per DP rank,
+        with TP*PP GPUs per process (CUDA_VISIBLE_DEVICES carries the whole TP
+        group). For standard TP mode, creates one process per node.
         """
         from srtctl.core.topology import NodePortAllocator, Process, endpoints_to_processes
 
@@ -242,16 +253,24 @@ class VLLMProtocol:
                     )
                     current_sys_port += 1
             else:
-                # DP+EP mode: one process per GPU
-                # Each process gets a single GPU and a unique dp_rank.
-                # All processes in this endpoint share ONE dp_rpc_port, allocated
-                # per-leader-host so two DP endpoints on the same node get
+                # DP+EP mode: one process per DP rank, spanning TP*PP GPUs each.
+                # CUDA_VISIBLE_DEVICES carries the full TP group so vllm can shard
+                # internally. All processes in this endpoint share ONE dp_rpc_port,
+                # allocated per-leader-host so two DP endpoints on the same node get
                 # distinct ports and their rank-0 leaders don't race to bind.
                 endpoint_dp_rpc_port = port_allocator.next_dp_rpc_port(endpoint.nodes[0])
+                gpus_per_dp = self._get_tp_size(endpoint.mode) * self._get_pp_size(endpoint.mode)
 
                 dp_rank = 0
                 for _node_rank, node in enumerate(endpoint.nodes):
-                    for gpu_idx in sorted(endpoint.gpu_indices):
+                    sorted_gpus = sorted(endpoint.gpu_indices)
+                    for chunk_start in range(0, len(sorted_gpus), gpus_per_dp):
+                        chunk = sorted_gpus[chunk_start:chunk_start + gpus_per_dp]
+                        if len(chunk) < gpus_per_dp:
+                            # Incomplete chunk — recipe asked for fewer GPUs on this
+                            # node than TP*PP needs. Should be caught upstream by the
+                            # endpoint allocator; skip defensively.
+                            break
                         is_leader = dp_rank == 0
                         http_port = port_allocator.next_http_port(node) if is_leader else 0
                         bootstrap_port = (
@@ -265,7 +284,7 @@ class VLLMProtocol:
                         processes.append(
                             Process(
                                 node=node,
-                                gpu_indices=frozenset([gpu_idx]),  # Single GPU per process
+                                gpu_indices=frozenset(chunk),
                                 sys_port=current_sys_port,
                                 http_port=http_port,
                                 endpoint_mode=endpoint.mode,
