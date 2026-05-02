@@ -17,7 +17,7 @@ set -e
 # "ensurepip is not available". uv bootstraps its own pip and works from inside
 # a parent venv, so this is robust across container image variants.
 SA_BENCH_VENV="/tmp/sa-bench-venv"
-SA_BENCH_DEPS=(aiohttp numpy pandas datasets Pillow tqdm transformers huggingface_hub jinja2 sentencepiece protobuf)
+SA_BENCH_DEPS=(aiohttp numpy pandas datasets Pillow tqdm transformers huggingface_hub jinja2 sentencepiece protobuf tiktoken)
 
 ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
