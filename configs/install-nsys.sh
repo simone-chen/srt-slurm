@@ -1,21 +1,30 @@
 #!/bin/bash
-# Install the Nsight Systems CLI inside the worker container.
+# Setup script for vllm-on-dynamo profiling recipes:
+#   1. Ensure nsys CLI is on PATH (runtime images strip it).
+#   2. Ensure msgpack is importable (some dynamo install paths need it
+#      and the upstream vllm-openai image doesn't bundle it; matches
+#      InferenceMAX's vllm-container-deps.sh).
 #
-# Why: the dynamo-vllm-runtime image (and other "runtime" tags) ships
-# without nsys, so any recipe with `profiling.type: nsys` fails with
-# "nsys: command not found" when srt-slurm wraps the worker.
+# Why combined: srt-slurm only honors a single setup_script per recipe.
 #
-# Strategy: rely on the container's pre-configured NVIDIA apt repo
-# (the runtime image is built FROM nvcr.io/nvidia/cuda:13.x-runtime,
-# which ships with /etc/apt/sources.list.d/cuda*.list pointing at
-# developer.download.nvidia.com). `apt-get install nsight-systems-cli`
-# resolves to the right architecture (aarch64 on lyris/ptyche, x86_64
-# on bia/eos) automatically.
-#
-# Fallback: if the cuda repo isn't configured (container variant
-# without it), install cuda-keyring first to set it up.
+# Strategy for nsys: rely on the container's pre-configured NVIDIA apt
+# repo (cuda-base images ship /etc/apt/sources.list.d/cuda*.list).
+# `apt-get install nsight-systems-cli` resolves to the right
+# architecture (aarch64 on lyris/ptyche, x86_64 on bia/eos)
+# automatically. If the cuda repo isn't configured, falls back to
+# installing cuda-keyring first.
 
 set -e
+
+# --- msgpack -------------------------------------------------------
+if ! python3 -c "import msgpack" >/dev/null 2>&1; then
+    echo "[setup] pip install msgpack"
+    pip install --no-cache-dir msgpack
+else
+    echo "[setup] msgpack already importable; skipping"
+fi
+
+# --- nsys ----------------------------------------------------------
 
 if command -v nsys >/dev/null 2>&1; then
     echo "[install-nsys] already on PATH at $(command -v nsys); skipping"
