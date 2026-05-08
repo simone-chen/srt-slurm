@@ -792,6 +792,12 @@ class ProfilingConfig:
             return self._get_nsys_prefix_trtllm(output_file)
 
         # SGLang / default path — keep existing behavior
+        # `--capture-range-end stop-shutdown` (vs the older `stop`) makes
+        # nsys finalize and write the .nsys-rep immediately when
+        # cudaProfilerStop fires inside the worker. With plain `stop`
+        # nsys stays attached to the process and only flushes the report
+        # on a clean exit — for vllm/dynamo workers the slurm teardown
+        # tends to SIGKILL them, so the report never lands on disk.
         cmd = [
             "nsys",
             "profile",
@@ -801,7 +807,7 @@ class ProfilingConfig:
             "-c",
             "cudaProfilerApi",
             "--capture-range-end",
-            "stop",
+            "stop-shutdown",
             "--force-overwrite",
             "true",
             "-o",
